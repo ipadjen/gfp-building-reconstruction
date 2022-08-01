@@ -17,6 +17,7 @@
 // #include <CGAL/Regularization/regularize_planes.h>
 
 #include "plane_detect.hpp"
+#include <CGAL/Shape_detection/Efficient_RANSAC.h>
 
 namespace geoflow::nodes::stepedge {
 
@@ -51,6 +52,7 @@ namespace geoflow::nodes::stepedge {
 
     // convert to lists required by the planedetector class
     // size_t i=0;
+    /*
     PointCollection points_vec;
     vec3f normals_vec;
     points_vec.reserve(points.size());
@@ -75,8 +77,32 @@ namespace geoflow::nodes::stepedge {
     R.min_segment_count = metrics_plane_min_points;
     if(points.size()>metrics_plane_min_points)
       R.grow_regions(PDS, DNTester);
+     */
+    //IP alternative -- try RANSAC
+    typedef std::pair<Kernel::Point_3, Kernel::Vector_3>         Point_with_normal;
+    typedef std::vector<Point_with_normal>                       Pwn_vector;
+    typedef CGAL::First_of_pair_property_map<Point_with_normal>  Point_map;
+    typedef CGAL::Second_of_pair_property_map<Point_with_normal> Normal_map;
+    typedef CGAL::Shape_detection::Efficient_RANSAC_traits
+            <Kernel, Pwn_vector, Point_map, Normal_map>             Traits;
+    typedef CGAL::Shape_detection::Plane<Traits>                 Plane_traits;
+    typedef CGAL::Shape_detection::Efficient_RANSAC<Traits> Efficient_ransac;
 
-    
+    Pwn_vector points_vec;
+    points_vec.reserve(points.size());
+    for (auto &pt : pnl_points) {
+        auto& p = boost::get<0>(pt);
+        auto& n = boost::get<1>(pt);
+        points_vec.emplace_back(std::make_pair(p, n));
+    }
+
+    typedef CGAL::Plane_3<Kernel> Plane_2;
+
+    Efficient_ransac ransac;
+    ransac.set_input(points_vec);
+    ransac.add_shape_factory<Plane_traits>();
+    ransac.detect();
+
     // if (regularise_planes) {
     //   // Regularize detected planes.
     //   CGAL::regularize_planes(points,
@@ -98,11 +124,17 @@ namespace geoflow::nodes::stepedge {
     if (only_horizontal) pts_per_roofplane[-1].second = std::vector<Point>();
     size_t horiz_pt_cnt=0, total_pt_cnt=0, wall_pt_cnt=0, unsegmented_pt_cnt=0;
     vec1f roof_elevations;
-    
-    for(auto region: R.regions){
-      auto& plane = region.plane;
-      output("planes").push_back(plane);
-      Vector n = plane.orthogonal_vector();
+
+    int count = 0;
+//    std::cout << "FOUND PLANES: " << ransac.shapes().size() << std::endl;
+    for(auto shape: ransac.shapes()){
+//      auto& plane = *dynamic_pointer_cast<Plane_traits>(shape);
+      auto& plane = *dynamic_cast<Plane_traits*>(shape.get());
+//      auto& plane_cgal = *dynamic_cast<Plane*>(shape.get());
+      Plane plane_cgal(boost::get<0>(pnl_points[plane.indices_of_assigned_points().front()]), plane.plane_normal());
+
+      output("planes").push_back(plane_cgal);
+      Vector n = plane.plane_normal();
       // this dot product is close to 0 for vertical planes
       auto horizontality = CGAL::abs(n*Vector(0,0,1));
       bool is_wall = horizontality < metrics_is_wall_threshold;
@@ -110,15 +142,15 @@ namespace geoflow::nodes::stepedge {
       // put slanted surface points at index -1 if we care only about horzontal surfaces
       if (!is_wall) {
         std::vector<Point> segpts;
-        for (auto& i : region.inliers) {
+        for (auto& i : shape->indices_of_assigned_points()) {
           segpts.push_back(boost::get<0>(pnl_points[i]));
           roof_elevations.push_back(float(boost::get<0>(pnl_points[i]).z()));
         }
         total_pt_cnt += segpts.size();
         if (!only_horizontal ||
             (only_horizontal && is_horizontal)) {
-          pts_per_roofplane[region.get_region_id()].second = segpts;
-          pts_per_roofplane[region.get_region_id()].first = plane;
+          pts_per_roofplane[count].second = segpts;
+          pts_per_roofplane[count].first = plane_cgal;
         } else if (!is_horizontal) {
           pts_per_roofplane[-1].second.insert(
             pts_per_roofplane[-1].second.end(),
@@ -130,24 +162,25 @@ namespace geoflow::nodes::stepedge {
           horiz_pt_cnt += segpts.size();
         }
       } else { // is_wall
-        wall_pt_cnt = region.inliers.size();
+        wall_pt_cnt = shape->indices_of_assigned_points().size();
       }
       if (is_horizontal)
         ++horiz_roofplane_cnt;
       else if (!is_wall && !is_horizontal)
         ++slant_roofplane_cnt;
 
-      for (size_t& i : region.inliers) {
-        boost::get<2>(pnl_points[i]) = region.get_region_id();
+      for (const size_t& i : shape->indices_of_assigned_points()) {
+        boost::get<2>(pnl_points[i]) = count;
         boost::get<3>(pnl_points[i]) = is_wall;
         boost::get<9>(pnl_points[i]) = is_horizontal;
       }
+      ++count;
     }
 
     bool b_is_horizontal = float(horiz_pt_cnt)/float(total_pt_cnt) > horiz_min_count;
     // int roof_type=-2; // as built: -2=undefined; -1=no pts; 0=LOD1, 1=LOD1.3, 2=LOD2
     std::string roof_type = "no planes";
-    if (R.regions.size()==0) {
+    if (ransac.shapes().size()==0) {
       // roof_type=-1;
       roof_type = "no points";
     } else if (horiz_roofplane_cnt==1 && slant_roofplane_cnt==0){
@@ -194,7 +227,7 @@ namespace geoflow::nodes::stepedge {
     output("is_wall").set(is_wall);
     output("is_horizontal").set(is_horizontal);
 
-    output("plane_adj").set(R.adjacencies);
+//    output("plane_adj").set(0);
   }
 
 }
