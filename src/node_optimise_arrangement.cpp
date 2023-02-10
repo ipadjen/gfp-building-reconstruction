@@ -255,7 +255,7 @@ void OptimiseArrangmentGridNode::process() {
     bool fp_u = edge->twin()->face()->data().in_footprint;
     bool fp_l = edge->face()->data().in_footprint;
     if (fp_u && fp_l) { // only edges with both neighbour faces inside the footprint
-      double l = smoothness_multiplier * edge_length(edge);
+      double l = (1 - data_multiplier) * edge_length(edge);
       edge->data().edge_weight = l;
       edge->twin()->data().edge_weight = l;
       max_weight = std::max(max_weight, l);
@@ -408,7 +408,7 @@ void OptimiseArrangmentNode::process() {
     bool fp_u = edge->twin()->face()->data().in_footprint;
     bool fp_l = edge->face()->data().in_footprint;
     if (fp_u && fp_l) { // only edges with both neighbour faces inside the footprint
-      double l = smoothness_multiplier * edge_length(edge);
+      double l = (1 - data_multiplier) * edge_length(edge);
       edge->data().edge_weight = l;
       edge->twin()->data().edge_weight = l;
       max_weight = std::max(max_weight, l);
